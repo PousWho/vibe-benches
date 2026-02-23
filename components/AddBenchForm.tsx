@@ -20,7 +20,7 @@
  * =============================================================================
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { Bench, BenchCategory, BenchRatings, CreateBenchBody } from "@/types/bench";
 import {
   BENCH_CATEGORY_KEYS,
@@ -52,6 +52,52 @@ const DEFAULT_RATINGS: BenchRatings = {
   view: 3,
   vibe: 3,
 };
+
+/** Кнопка-звезда: pointer, увеличение при hover, анимация при клике */
+function StarButton({
+  filled,
+  onClick,
+  disabled,
+  title,
+}: {
+  filled: boolean;
+  onClick: () => void;
+  disabled: boolean;
+  title: string;
+}) {
+  const [animating, setAnimating] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+  const handleClick = () => {
+    if (disabled) return;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setAnimating(true);
+    onClick();
+    timeoutRef.current = setTimeout(() => {
+      setAnimating(false);
+      timeoutRef.current = null;
+    }, 220);
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={disabled}
+      title={title}
+      className="flex flex-1 cursor-pointer items-center justify-center transition-transform duration-150 ease-out hover:scale-110 focus:outline-none disabled:cursor-not-allowed disabled:hover:scale-100"
+      style={{
+        color: filled ? "#0d9488" : "#9ca3af",
+        fontSize: "1.75rem",
+        lineHeight: 1,
+        animation: animating ? "star-pop 0.22s ease-out" : undefined,
+      }}
+    >
+      ★
+    </button>
+  );
+}
 
 /**
  * Компонент формы. React вызывает эту функцию каждый раз, когда нужно
@@ -171,7 +217,7 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Например: Лавка с видом на закат"
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder:text-zinc-400 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               disabled={isSubmitting}
               autoFocus
             />
@@ -187,7 +233,7 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Опишите место и вайб"
               rows={3}
-              className="resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder:text-zinc-400 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              className="resize-none rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               disabled={isSubmitting}
             />
           </label>
@@ -200,7 +246,7 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value as BenchCategory)}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 focus:outline-none dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               disabled={isSubmitting}
             >
               {BENCH_CATEGORY_KEYS.map((key) => (
@@ -211,8 +257,8 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
             </select>
           </label>
 
-          {/* ---------- Рейтинги 1–5 (звёзды как числа) ---------- */}
-          <div className="flex flex-col gap-3">
+          {/* ---------- Рейтинги 1–5: подпись сверху, звёзды во всю ширину под ней ---------- */}
+          <div className="flex flex-col gap-4">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               Оценки (1–5)
             </span>
@@ -224,21 +270,24 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
                 { key: "vibe" as const, label: "✨ Вайб" },
               ] as const
             ).map(({ key, label }) => (
-              <label key={key} className="flex items-center justify-between gap-2">
+              <div key={key} className="flex w-full flex-col gap-1.5">
                 <span className="text-sm text-zinc-600 dark:text-zinc-400">{label}</span>
-                <select
-                  value={ratings[key]}
-                  onChange={(e) => setRating(key, Number(e.target.value))}
-                  className="w-16 rounded border border-zinc-300 bg-white px-2 py-1 text-center dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                  disabled={isSubmitting}
+                <div
+                  className="flex w-full items-center justify-between gap-1"
+                  role="group"
+                  aria-label={`Оценка: ${ratings[key]} из 5`}
                 >
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <option key={n} value={n}>
-                      {n} ⭐
-                    </option>
+                  {([1, 2, 3, 4, 5] as const).map((n) => (
+                    <StarButton
+                      key={n}
+                      filled={n <= ratings[key]}
+                      onClick={() => setRating(key, n)}
+                      disabled={isSubmitting}
+                      title={`${n} из 5`}
+                    />
                   ))}
-                </select>
-              </label>
+                </div>
+              </div>
             ))}
           </div>
 

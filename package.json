@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "countries-list": "^2.6.1",
+    "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.95.3",
     "mapbox-gl": "^3.18.1",
     "next": "16.1.4",

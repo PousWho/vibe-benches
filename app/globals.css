@@ -24,3 +24,178 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes star-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/*
+ * Попап лавочки: весь контейнер Mapbox прозрачный, чтобы размытие и «стекло»
+ * работали — карта была видна сквозь блок. Иначе фон попапа перекрывает карту.
+ */
+.mapboxgl-popup {
+  background: transparent !important;
+}
+
+.mapboxgl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+  min-width: 0 !important;
+  position: relative;
+}
+
+/* Крестик закрытия — всегда в правом верхнем углу карточки, не по центру */
+.mapboxgl-popup-close-button {
+  position: absolute !important;
+  right: 12px !important;
+  top: 12px !important;
+  left: auto !important;
+  width: 32px;
+  height: 32px;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 24px !important;
+  line-height: 32px !important;
+  color: #64748b !important;
+  background: rgba(255, 255, 255, 0.6) !important;
+  border: none !important;
+  border-radius: 50% !important;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.mapboxgl-popup-close-button:hover {
+  color: #0f172a !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+}
+
+/*
+ * Блок с инфой о лавочке — эффект жидкого стекла (glassmorphism):
+ * карта размыта за блоком (backdrop-filter), полупрозрачный градиент,
+ * блик по верхнему краю, лёгкая рамка. Контейнеры Mapbox прозрачны выше.
+ */
+.bench-popup-content {
+  min-width: 320px;
+  max-width: 520px;
+  width: 90vw;
+  padding: 28px 32px;
+  padding-top: 44px;
+  font-family: system-ui, sans-serif;
+  /* Полупрозрачность — сквозь блок видна карта, размытая ниже */
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.25) 100%
+  );
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 24px 48px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  color: #0f172a;
+}
+
+.bench-popup-content .bench-popup-title {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.bench-popup-content .bench-popup-category {
+  margin: 0 0 16px;
+  font-size: 0.9375rem;
+  color: #475569;
+  font-weight: 600;
+}
+
+.bench-popup-content .bench-popup-description {
+  margin: 0 0 20px;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: #334155;
+}
+
+.bench-popup-content .bench-popup-ratings {
+  font-size: 1.0625rem;
+  line-height: 1.9;
+  color: #334155;
+  font-weight: 500;
+}
+
+.bench-popup-content .bench-popup-ratings span {
+  display: block;
+}
+
+.bench-popup-content .bench-popup-creator {
+  margin: 14px 0 0;
+  font-size: 0.9375rem;
+  color: #475569;
+}
+
+.bench-popup-content .bench-popup-creator-link {
+  color: #16a34a;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.bench-popup-content .bench-popup-creator-link:hover {
+  text-decoration: underline;
+}
+
+.bench-popup-content .bench-popup-actions {
+  margin: 14px 0 0;
+}
+
+.bench-popup-content .bench-popup-delete {
+  display: inline-block;
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #fff;
+  background: #b91c1c;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.bench-popup-content .bench-popup-delete:hover {
+  background: #991b1b;
+}
+
+/* Пять звёзд в попапе: заполненные — бирюзово-синие, пустые — серые */
+.bench-popup-content .bench-stars-inline {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.bench-popup-content .bench-star {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.bench-popup-content .bench-star-filled {
+  color: #0d9488;
+}
+
+.bench-popup-content .bench-star-empty {
+  color: #9ca3af;
+}
