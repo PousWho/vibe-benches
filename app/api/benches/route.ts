@@ -27,8 +27,13 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { createClient as createServerSupabase } from "@/lib/supabase/server";
-import type { Bench, BenchCategory, CreateBenchBody } from "@/types/bench";
+import { benchPhotoPublicUrl } from "@/lib/bench-photo-url";
+import { effectiveImageContentType, isAllowedBenchPhotoFile } from "@/lib/image-file-utils";
+import type { Bench, BenchCategory, BenchPhoto, CreateBenchBody } from "@/types/bench";
 import { BENCH_CATEGORY_KEYS } from "@/types/bench";
+
+const MAX_BENCH_PHOTOS = 6;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 /** Расстояние между двумя точками в км (формула Haversine) */
 function haversineKm(
@@ -109,6 +114,28 @@ export async function GET(request: Request) {
       // Таблица bench_reviews может отсутствовать до применения миграции 006
     }
 
+    let photosByBench: Record<string, BenchPhoto[]> = {};
+    try {
+      const ids = (benchesData ?? []).map((r) => r.id);
+      if (ids.length) {
+        const { data: photoRows } = await supabase
+          .from("bench_photos")
+          .select("bench_id, storage_path, sort_order")
+          .in("bench_id", ids)
+          .order("sort_order", { ascending: true });
+        for (const p of photoRows ?? []) {
+          const bid = p.bench_id as string;
+          if (!photosByBench[bid]) photosByBench[bid] = [];
+          photosByBench[bid].push({
+            url: benchPhotoPublicUrl(p.storage_path as string),
+            sort_order: Number(p.sort_order) || 0,
+          });
+        }
+      }
+    } catch {
+      // Таблица bench_photos до миграции 011
+    }
+
     let benches: Bench[] = (benchesData ?? []).map((row) => {
       const community_rating = avgByBench[row.id] ?? null;
       return {
@@ -130,6 +157,7 @@ export async function GET(request: Request) {
         user_id: row.user_id ?? null,
         created_by_name: row.created_by_name ?? null,
         community_rating: community_rating ?? undefined,
+        photos: photosByBench[row.id],
       };
     });
 
@@ -168,9 +196,10 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    // Клиент с доступом к cookies — по ним восстанавливается сессия и пользователь.
     const supabaseAuth = await createServerSupabase();
-    const { data: { user } } = await supabaseAuth.auth.getUser();
+    const {
+      data: { user },
+    } = await supabaseAuth.auth.getUser();
 
     if (!user) {
       return NextResponse.json(
@@ -179,8 +208,44 @@ export async function POST(request: Request) {
       );
     }
 
-    const body: CreateBenchBody = await request.json();
-    const { title, description, lat, lng, category, ratings } = body;
+    let title: string;
+    let description: string;
+    let lat: number;
+    let lng: number;
+    let category: string | undefined;
+    let ratings: CreateBenchBody["ratings"];
+    let photoFiles: File[] = [];
+
+    const ct = request.headers.get("content-type") ?? "";
+    if (ct.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const raw = form.get("data");
+      if (typeof raw !== "string") {
+        return NextResponse.json({ error: "Нужно поле data (JSON с полями лавочки)" }, { status: 400 });
+      }
+      let parsed: CreateBenchBody;
+      try {
+        parsed = JSON.parse(raw) as CreateBenchBody;
+      } catch {
+        return NextResponse.json({ error: "Поле data — невалидный JSON" }, { status: 400 });
+      }
+      title = parsed.title;
+      description = parsed.description;
+      lat = parsed.lat;
+      lng = parsed.lng;
+      category = parsed.category;
+      ratings = parsed.ratings;
+      const entries = form.getAll("photos");
+      photoFiles = entries.filter((v): v is File => v instanceof File && v.size > 0);
+    } else {
+      const body = (await request.json()) as CreateBenchBody;
+      title = body.title;
+      description = body.description;
+      lat = body.lat;
+      lng = body.lng;
+      category = body.category;
+      ratings = body.ratings;
+    }
 
     if (!title?.trim() || description == null || lat == null || lng == null || !ratings) {
       return NextResponse.json(
@@ -189,11 +254,26 @@ export async function POST(request: Request) {
       );
     }
 
-    const safeCategory = category && BENCH_CATEGORY_KEYS.includes(category as BenchCategory)
-      ? (category as BenchCategory)
-      : "other";
+    if (photoFiles.length > MAX_BENCH_PHOTOS) {
+      return NextResponse.json(
+        { error: `Не больше ${MAX_BENCH_PHOTOS} фотографий` },
+        { status: 400 }
+      );
+    }
+    for (const f of photoFiles) {
+      if (!isAllowedBenchPhotoFile(f, MAX_PHOTO_BYTES)) {
+        return NextResponse.json(
+          { error: "Допустимы только JPEG, PNG, WebP, GIF до 5 МБ каждый" },
+          { status: 400 }
+        );
+      }
+    }
 
-    // Имя автора для попапа: берём из профиля текущего пользователя.
+    const safeCategory =
+      category && BENCH_CATEGORY_KEYS.includes(category as BenchCategory)
+        ? (category as BenchCategory)
+        : "other";
+
     let createdByName: string | null = null;
     const { data: profileRow } = await supabaseAuth
       .from("profiles")
@@ -217,18 +297,66 @@ export async function POST(request: Request) {
         view: Number(ratings.view) || 0,
         vibe: Number(ratings.vibe) || 0,
       })
-      .select("id, title, description, lat, lng, category, accessibility, crowd, view, vibe, created_at, user_id, created_by_name")
+      .select(
+        "id, title, description, lat, lng, category, accessibility, crowd, view, vibe, created_at, user_id, created_by_name"
+      )
       .single();
 
     if (error) {
       console.error("Supabase insert error:", error);
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Собираем объект в формате Bench для ответа клиенту (ratings — объект, как в GET).
+    const benchPhotos: BenchPhoto[] = [];
+    const uploadedPaths: string[] = [];
+
+    if (photoFiles.length > 0) {
+      try {
+        for (let i = 0; i < photoFiles.length; i++) {
+          const file = photoFiles[i];
+          const ext = file.name.split(".").pop()?.toLowerCase();
+          const safeExt = ext && /^[a-z0-9]{2,5}$/.test(ext) ? ext : "jpg";
+          const objectPath = `${data.id}/${globalThis.crypto.randomUUID()}.${safeExt}`;
+          const buf = Buffer.from(await file.arrayBuffer());
+          const { error: upErr } = await supabaseAuth.storage
+            .from("bench-photos")
+            .upload(objectPath, buf, {
+              contentType: effectiveImageContentType(file),
+              upsert: false,
+            });
+          if (upErr) throw new Error(upErr.message);
+          uploadedPaths.push(objectPath);
+
+          const { error: insErr } = await supabaseAuth.from("bench_photos").insert({
+            bench_id: data.id,
+            storage_path: objectPath,
+            sort_order: i,
+          });
+          if (insErr) throw new Error(insErr.message);
+
+          benchPhotos.push({
+            url: benchPhotoPublicUrl(objectPath),
+            sort_order: i,
+          });
+        }
+      } catch (uploadErr) {
+        if (uploadedPaths.length) {
+          await supabaseAuth.storage.from("bench-photos").remove(uploadedPaths);
+        }
+        await supabaseAuth.from("benches").delete().eq("id", data.id);
+        console.error("Bench photo upload error:", uploadErr);
+        return NextResponse.json(
+          {
+            error:
+              uploadErr instanceof Error
+                ? uploadErr.message
+                : "Не удалось загрузить фото. Выполни миграцию 011 в Supabase (bucket bench-photos).",
+          },
+          { status: 500 }
+        );
+      }
+    }
+
     const bench: Bench = {
       id: data.id,
       title: data.title,
@@ -245,15 +373,12 @@ export async function POST(request: Request) {
       created_at: data.created_at,
       user_id: data.user_id ?? null,
       created_by_name: data.created_by_name ?? null,
+      photos: benchPhotos.length ? benchPhotos : undefined,
     };
 
-    // 201 Created — стандартный код ответа «ресурс создан». В теле отдаём созданную лавочку.
     return NextResponse.json(bench, { status: 201 });
   } catch (err) {
     console.error("POST /api/benches error:", err);
-    return NextResponse.json(
-      { error: "Ошибка сервера" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Ошибка сервера" }, { status: 500 });
   }
 }

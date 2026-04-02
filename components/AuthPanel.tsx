@@ -7,13 +7,13 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { COUNTRY_OPTIONS } from "@/lib/countries";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 
 type AuthMode = "login" | "register" | "forgot";
 
 type AuthPanelProps = {
   userEmail?: string | null;
-  onSignOut: () => void;
   onClose?: () => void;
   asModal?: boolean;
 };
@@ -23,7 +23,6 @@ const inputClass =
 
 export default function AuthPanel({
   userEmail,
-  onSignOut,
   onClose,
   asModal = false,
 }: AuthPanelProps) {
@@ -36,6 +35,7 @@ export default function AuthPanel({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
   const { showToast } = useToast();
+  const { signOut } = useAuth();
 
   const supabase = createClient();
 
@@ -95,7 +95,7 @@ export default function AuthPanel({
         </p>
         <button
           type="button"
-          onClick={() => supabase.auth.signOut().then(onSignOut)}
+          onClick={() => void signOut()}
           className="w-full rounded-lg border border-zinc-300 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
           Выйти
@@ -176,7 +176,7 @@ export default function AuthPanel({
               placeholder={mode === "register" ? "минимум 6 символов" : ""}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required={mode !== "forgot"}
+              required
               minLength={mode === "register" ? 6 : undefined}
               className={inputClass}
             />

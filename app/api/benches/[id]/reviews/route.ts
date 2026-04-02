@@ -68,6 +68,22 @@ export async function POST(
     return NextResponse.json({ error: "Нужно поле rating (1–5)" }, { status: 400 });
   }
 
+  const { data: benchOwnerRow, error: benchErr } = await supabase
+    .from("benches")
+    .select("user_id")
+    .eq("id", benchId)
+    .maybeSingle();
+  if (benchErr) {
+    console.error("bench lookup for review:", benchErr);
+    return NextResponse.json({ error: benchErr.message }, { status: 500 });
+  }
+  if (benchOwnerRow?.user_id && benchOwnerRow.user_id === user.id) {
+    return NextResponse.json(
+      { error: "Нельзя оставить отзыв на свою лавочку" },
+      { status: 403 }
+    );
+  }
+
   const { error: upsertError } = await supabase
     .from("bench_reviews")
     .upsert(
@@ -80,12 +96,7 @@ export async function POST(
     return NextResponse.json({ error: upsertError.message }, { status: 500 });
   }
 
-  const { data: benchRow } = await supabase
-    .from("benches")
-    .select("user_id")
-    .eq("id", benchId)
-    .single();
-  const benchOwnerId = benchRow?.user_id ?? null;
+  const benchOwnerId = benchOwnerRow?.user_id ?? null;
   if (benchOwnerId && benchOwnerId !== user.id) {
     await supabase.from("notifications").insert({
       user_id: benchOwnerId,

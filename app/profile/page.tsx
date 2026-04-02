@@ -6,8 +6,10 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { COUNTRY_OPTIONS } from "@/lib/countries";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import type { User } from "@supabase/supabase-js";
 import type { Notification } from "@/types/bench";
@@ -25,6 +27,8 @@ const inputClass =
   "rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100 w-full";
 
 export default function ProfilePage() {
+  const router = useRouter();
+  const { signOut } = useAuth();
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [benchesCount, setBenchesCount] = useState<number>(0);
@@ -38,6 +42,11 @@ export default function ProfilePage() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const { showToast } = useToast();
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/");
+  };
 
   useEffect(() => {
     const supabase = createClient();
@@ -316,6 +325,16 @@ export default function ProfilePage() {
             </div>
           </form>
         )}
+      </div>
+
+      <div className="mt-4 flex justify-center">
+        <button
+          type="button"
+          onClick={() => void handleSignOut()}
+          className="text-sm font-medium text-red-600 hover:text-red-700 hover:underline dark:text-red-400 dark:hover:text-red-300"
+        >
+          Выйти из аккаунта
+        </button>
       </div>
 
       {/* Уведомления: комментарии и отзывы к лавочкам пользователя */}

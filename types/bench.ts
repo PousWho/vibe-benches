@@ -30,6 +30,12 @@ export const BENCH_CATEGORY_LABELS: Record<BenchCategory, string> = {
   other: "Другое",
 };
 
+/** Одно фото лавочки (публичный URL из Supabase Storage) */
+export type BenchPhoto = {
+  url: string;
+  sort_order: number;
+};
+
 /** Лавочка в формате для карты и API-ответов */
 export type Bench = {
   id: string;
@@ -46,6 +52,8 @@ export type Bench = {
   created_by_name?: string | null;
   /** Средний рейтинг по отзывам (оценка сообщества), null если отзывов нет */
   community_rating?: number | null;
+  /** Фото с лавочки (порядок по sort_order); для маркера на карте берётся первое */
+  photos?: BenchPhoto[];
 };
 
 /** Комментарий к лавочке (или ответ на комментарий) */

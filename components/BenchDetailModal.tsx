@@ -3,7 +3,7 @@
 /**
  * Модалка просмотра лавочки: оценка сообщества, описание, рейтинги, отзыв (свой), комментарии и ответы.
  */
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import Link from "next/link";
 import type { Bench, BenchComment } from "@/types/bench";
 import { BENCH_CATEGORY_LABELS } from "@/types/bench";
@@ -298,6 +298,43 @@ export default function BenchDetailModal({
   const { showToast } = useToast();
   const categoryLabel = BENCH_CATEGORY_LABELS[bench.category] ?? "Другое";
   const isOwnBench = Boolean(currentUserId && bench.user_id && bench.user_id === currentUserId);
+  /** Индекс фото в лайтбоксе (null — закрыто) */
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const [carouselIndex, setCarouselIndex] = useState(0);
+
+  const sortedPhotos = useMemo(
+    () =>
+      [...(bench.photos ?? [])].sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+      ),
+    [bench.photos]
+  );
+
+  useEffect(() => {
+    setCarouselIndex(0);
+    setLightboxIndex(null);
+    const el = carouselRef.current;
+    if (el) el.scrollLeft = 0;
+  }, [bench.id]);
+
+  const onCarouselScroll = useCallback(() => {
+    const el = carouselRef.current;
+    if (!el || sortedPhotos.length === 0) return;
+    const w = el.clientWidth;
+    if (w <= 0) return;
+    const i = Math.round(el.scrollLeft / w);
+    setCarouselIndex(Math.min(Math.max(i, 0), sortedPhotos.length - 1));
+  }, [sortedPhotos.length]);
+
+  const scrollCarouselTo = useCallback((index: number) => {
+    const el = carouselRef.current;
+    if (!el || sortedPhotos.length === 0) return;
+    const w = el.clientWidth;
+    const i = Math.min(Math.max(index, 0), sortedPhotos.length - 1);
+    el.scrollTo({ left: i * w, behavior: "smooth" });
+    setCarouselIndex(i);
+  }, [sortedPhotos.length]);
 
   useEffect(() => {
     fetch(`/api/benches/${encodeURIComponent(bench.id)}/reviews`, { credentials: "include" })
@@ -312,6 +349,27 @@ export default function BenchDetailModal({
       .then((data) => setComments(Array.isArray(data) ? data : []))
       .catch(() => setComments([]));
   }, [bench.id]);
+
+  useEffect(() => {
+    if (lightboxIndex == null || sortedPhotos.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightboxIndex(null);
+      if (e.key === "ArrowLeft") {
+        setLightboxIndex((i) => {
+          if (i == null) return i;
+          return i <= 0 ? sortedPhotos.length - 1 : i - 1;
+        });
+      }
+      if (e.key === "ArrowRight") {
+        setLightboxIndex((i) => {
+          if (i == null) return i;
+          return i >= sortedPhotos.length - 1 ? 0 : i + 1;
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxIndex, sortedPhotos.length]);
 
   const submitReview = (rating: number) => {
     if (!currentUserId || reviewLoading) return;
@@ -404,6 +462,7 @@ export default function BenchDetailModal({
   };
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
       role="dialog"
@@ -437,6 +496,76 @@ export default function BenchDetailModal({
 
         {/* Прокручиваемый контент */}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4">
+          {sortedPhotos.length > 0 && (
+            <div className="mb-4">
+              <div className="relative">
+                <div
+                  ref={carouselRef}
+                  onScroll={onCarouselScroll}
+                  className="flex snap-x snap-mandatory overflow-x-auto scroll-smooth rounded-xl ring-1 ring-zinc-200 [-ms-overflow-style:none] [scrollbar-width:none] dark:ring-zinc-600 [&::-webkit-scrollbar]:hidden"
+                >
+                  {sortedPhotos.map((p, i) => (
+                    <button
+                      key={p.url}
+                      type="button"
+                      onClick={() => setLightboxIndex(i)}
+                      className="w-full shrink-0 snap-center cursor-zoom-in text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+                      title="Открыть фото"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={p.url}
+                        alt=""
+                        className="pointer-events-none h-52 w-full bg-zinc-100 object-cover dark:bg-zinc-800 sm:h-56"
+                      />
+                    </button>
+                  ))}
+                </div>
+                {sortedPhotos.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      aria-label="Предыдущее фото"
+                      onClick={() => scrollCarouselTo(carouselIndex - 1)}
+                      className="absolute left-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-xl text-white shadow-md backdrop-blur-sm transition hover:bg-black/60"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Следующее фото"
+                      onClick={() => scrollCarouselTo(carouselIndex + 1)}
+                      className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-xl text-white shadow-md backdrop-blur-sm transition hover:bg-black/60"
+                    >
+                      ›
+                    </button>
+                  </>
+                )}
+              </div>
+              {sortedPhotos.length > 1 && (
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                  <p className="w-full text-center text-xs text-zinc-500 dark:text-zinc-400">
+                    Листайте фото пальцем или стрелками
+                  </p>
+                  <div className="flex justify-center gap-1.5">
+                    {sortedPhotos.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        aria-label={`Фото ${i + 1}`}
+                        onClick={() => scrollCarouselTo(i)}
+                        className={`h-2 rounded-full transition-all ${
+                          i === carouselIndex
+                            ? "w-5 bg-green-600"
+                            : "w-2 bg-zinc-300 dark:bg-zinc-600"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {/* Оценка сообщества — сверху карточки */}
           <div className="mb-3 flex flex-wrap items-center gap-2">
             {bench.community_rating != null ? (
@@ -458,8 +587,8 @@ export default function BenchDetailModal({
             )}
           </div>
 
-          {/* Свой отзыв (оценка 1–5) */}
-          {currentUserId && (
+          {/* Свой отзыв — не показываем автору лавочки */}
+          {currentUserId && !isOwnBench && (
             <div className="mb-4">
               <p className="mb-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {myReviewRating != null ? "Ваш отзыв (можно изменить):" : "Оставить отзыв:"}
@@ -482,14 +611,17 @@ export default function BenchDetailModal({
             </div>
           )}
 
-          <p className="mb-3 text-sm font-medium text-zinc-500 dark:text-zinc-400">{categoryLabel}</p>
+          <p className="mb-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">Описание</p>
           {bench.description ? (
-            <p className="mb-4 whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
+            <p className="mb-3 whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
               {bench.description}
             </p>
           ) : (
-            <p className="mb-4 text-zinc-500 dark:text-zinc-400">Без описания</p>
+            <p className="mb-3 text-zinc-500 dark:text-zinc-400">Без описания</p>
           )}
+          <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+            Категория: <span className="text-zinc-700 dark:text-zinc-300">{categoryLabel}</span>
+          </p>
 
           <p className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">Оценки</p>
           <div className="flex flex-col gap-4">
@@ -601,5 +733,69 @@ export default function BenchDetailModal({
         </div>
       </div>
     </div>
+
+    {lightboxIndex != null && sortedPhotos[lightboxIndex] && (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Просмотр фото"
+        onClick={() => setLightboxIndex(null)}
+      >
+        <button
+          type="button"
+          onClick={() => setLightboxIndex(null)}
+          className="absolute right-4 top-4 z-10 rounded-full bg-white/10 px-3 py-1 text-lg text-white hover:bg-white/20"
+          aria-label="Закрыть фото"
+        >
+          ✕
+        </button>
+        {sortedPhotos.length > 1 && (
+          <>
+            <button
+              type="button"
+              aria-label="Предыдущее"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxIndex((i) =>
+                  i == null ? i : i <= 0 ? sortedPhotos.length - 1 : i - 1
+                );
+              }}
+              className="absolute left-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-2xl text-white hover:bg-white/25 sm:left-4"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              aria-label="Следующее"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxIndex((i) =>
+                  i == null
+                    ? i
+                    : i >= sortedPhotos.length - 1
+                      ? 0
+                      : i + 1
+                );
+              }}
+              className="absolute right-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-2xl text-white hover:bg-white/25 sm:right-4"
+            >
+              ›
+            </button>
+            <p className="absolute bottom-4 left-0 right-0 text-center text-sm text-white/80">
+              {lightboxIndex + 1} / {sortedPhotos.length} · ← → на клавиатуре
+            </p>
+          </>
+        )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={sortedPhotos[lightboxIndex].url}
+          alt=""
+          className="max-h-[90vh] max-w-full object-contain shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    )}
+    </>
   );
 }

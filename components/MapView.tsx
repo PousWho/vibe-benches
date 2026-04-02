@@ -15,15 +15,16 @@
  * - refs — ссылки на DOM и объекты Mapbox (карта, маркеры), чтобы управлять ими в useEffect.
  * - state — данные, от которых зависит отрисовка (список лавочек, открыта ли форма, ошибки).
  * - useEffect №1 — один раз при загрузке страницы запрашивает лавочки с API.
- * - useEffect №2 — один раз создаёт карту, вешает контролы и геолокацию.
+ * - useLayoutEffect №2 — один раз создаёт карту, вешает контролы, resize и геолокацию.
  * - useEffect №3 — при клике на карту запоминает координаты и открывает форму.
  * - useEffect №4 — когда изменился список лавочек или карта готова, перерисовывает маркеры.
  * - return — разметка: контейнер карты, блок статуса, форма (если открыта).
  * =============================================================================
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
+import Supercluster from "supercluster";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Bench } from "@/types/bench";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,6 +37,50 @@ import BenchDetailModal from "./BenchDetailModal";
  * В Mapbox порядок часто [lng, lat], в наших объектах — { lng, lat }.
  */
 type LngLat = { lng: number; lat: number };
+
+/** Маркер с миниатюрой фото (круг) — только если у лавочки есть фото */
+function createBenchPhotoMarkerElement(bench: Bench): HTMLElement {
+  const wrap = document.createElement("div");
+  const size = 46;
+  wrap.style.width = `${size}px`;
+  wrap.style.height = `${size}px`;
+  wrap.style.borderRadius = "50%";
+  wrap.style.overflow = "hidden";
+  wrap.style.border = "3px solid #16a34a";
+  wrap.style.boxShadow = "0 2px 8px rgba(0,0,0,0.28)";
+  wrap.style.backgroundSize = "cover";
+  wrap.style.backgroundPosition = "center";
+  wrap.style.flexShrink = "0";
+  const cover = bench.photos?.[0]?.url;
+  if (cover) {
+    wrap.style.backgroundImage = `url(${JSON.stringify(cover)})`;
+  }
+  return wrap;
+}
+
+type BenchClusterProps = { benchId: string };
+
+/** Круглый маркер-кластер с числом лавочек */
+function createClusterMarkerElement(count: number): HTMLElement {
+  const el = document.createElement("div");
+  const size = 48;
+  el.style.width = `${size}px`;
+  el.style.height = `${size}px`;
+  el.style.borderRadius = "50%";
+  el.style.background = "#16a34a";
+  el.style.color = "#fff";
+  el.style.fontWeight = "700";
+  el.style.fontSize = count > 99 ? "14px" : "16px";
+  el.style.display = "flex";
+  el.style.alignItems = "center";
+  el.style.justifyContent = "center";
+  el.style.boxShadow = "0 2px 10px rgba(0,0,0,0.35)";
+  el.style.cursor = "pointer";
+  el.style.flexShrink = "0";
+  el.textContent = count > 999 ? "999+" : String(count);
+  el.setAttribute("aria-label", `Лавочек в группе: ${count}`);
+  return el;
+}
 
 type MapViewProps = {
   /** Открыть модалку этой лавочки (например из ссылки в уведомлении) */
@@ -147,12 +192,11 @@ export default function MapView({ initialBenchId = null }: MapViewProps) {
   // ===========================================================================
   // EFFECT 2: Инициализация карты Mapbox (один раз)
   // ===========================================================================
-  // Создаём карту, добавляем контролы (зум, геолокация), запрашиваем позицию пользователя.
-  // Вешаем обработчик клика по карте: при клике по пустому месту карты сохраняем координаты
-  // и открываем форму. Клик по маркеру лавочки обрабатывается в EFFECT 3 (там мы останавливаем
-  // всплытие события), поэтому форма не открывается — открывается только попап маркера.
+  // useLayoutEffect + resize после load, ResizeObserver и pageshow: при возврате с другой страницы
+  // контейнер иногда 0×0 или WebGL не перерисовывается — без map.resize() остаётся серая сетка.
+  // Клик по карте: координаты для формы; клик по маркеру лавочки — в EFFECT 3 (stopPropagation).
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     if (!token) {
       setHasToken(false);
@@ -161,12 +205,13 @@ export default function MapView({ initialBenchId = null }: MapViewProps) {
 
     mapboxgl.accessToken = token;
 
-    if (!mapContainerRef.current || mapRef.current) return; // Уже есть карта или нет контейнера — выходим
+    const container = mapContainerRef.current;
+    if (!container || mapRef.current) return;
 
     const fallback: LngLat = { lng: 19.2636, lat: 42.4304 };
 
     const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
+      container,
       style: "mapbox://styles/mapbox/streets-v12",
       center: [fallback.lng, fallback.lat],
       zoom: 12,
@@ -174,6 +219,26 @@ export default function MapView({ initialBenchId = null }: MapViewProps) {
 
     mapRef.current = map;
     setMapReady(true);
+
+    const safeResize = () => {
+      try {
+        if (mapRef.current === map) map.resize();
+      } catch {
+        /* */
+      }
+    };
+
+    map.once("load", safeResize);
+    const ro = new ResizeObserver(() => {
+      safeResize();
+    });
+    ro.observe(container);
+    window.addEventListener("resize", safeResize);
+
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) safeResize();
+    };
+    window.addEventListener("pageshow", onPageShow);
 
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
     map.addControl(
@@ -204,17 +269,24 @@ export default function MapView({ initialBenchId = null }: MapViewProps) {
       );
     }
 
-    // ---------- Клик по карте: если авторизован — запоминаем координаты (откроется форма); иначе — модалка «Войти». ----------
     const onMapClick = (e: mapboxgl.MapMouseEvent) => {
       const { lng, lat } = e.lngLat;
       setAddBenchCoords({ lng, lat });
     };
     map.on("click", onMapClick);
 
+    requestAnimationFrame(() => {
+      requestAnimationFrame(safeResize);
+    });
+
     return () => {
+      window.removeEventListener("resize", safeResize);
+      window.removeEventListener("pageshow", onPageShow);
+      ro.disconnect();
       map.off("click", onMapClick);
       setMapReady(false);
       markerRef.current?.remove();
+      markerRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -239,49 +311,181 @@ export default function MapView({ initialBenchId = null }: MapViewProps) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!mapReady || !map || !benches.length) return;
+    if (!mapReady || !map) return;
 
-    benchMarkersRef.current.forEach((m) => m.remove());
-    benchMarkersRef.current = [];
-
-    /** Зум, к которому подлетаем при клике по маркеру (лавочка хорошо видна) */
-    const ZOOM_TO_MARKER = 15;
-    const currentUserId = user?.id ?? null;
-
-    benches.forEach((bench) => {
-      const marker = new mapboxgl.Marker({ color: "#16a34a" })
-        .setLngLat([bench.lng, bench.lat])
-        .addTo(map);
-
-      const el = marker.getElement();
-      if (el) {
-        el.style.cursor = "pointer";
-        el.style.transition = "filter 0.15s ease";
-        el.addEventListener("mouseenter", () => {
-          el.style.filter = "brightness(1.2)";
-        });
-        el.addEventListener("mouseleave", () => {
-          el.style.filter = "";
-        });
-        el.addEventListener("click", (e: Event) => {
-          e.stopPropagation();
-          map.flyTo({
-            center: [bench.lng, bench.lat],
-            zoom: Math.max(map.getZoom(), ZOOM_TO_MARKER),
-            duration: 500,
-          });
-          setSelectedBench(bench);
-        });
-      }
-
-      benchMarkersRef.current.push(marker);
-    });
-
-    return () => {
+    const clearMarkers = () => {
       benchMarkersRef.current.forEach((m) => m.remove());
       benchMarkersRef.current = [];
     };
-  }, [mapReady, benches, user?.id]);
+
+    if (!benches.length) {
+      clearMarkers();
+      return;
+    }
+
+    // maxZoom ниже → отдельные маркеры появляются при меньшем «приближении» (ещё на отдалённом масштабе).
+    // radius меньше → группы реже слипаются в один круг на экране.
+    const index = new Supercluster<BenchClusterProps>({
+      radius: 52,
+      maxZoom: 11,
+      minZoom: 0,
+      minPoints: 2,
+    });
+
+    index.load(
+      benches.map((b) => ({
+        type: "Feature" as const,
+        properties: { benchId: b.id },
+        geometry: {
+          type: "Point" as const,
+          coordinates: [b.lng, b.lat] as [number, number],
+        },
+      }))
+    );
+
+    const benchById = new Map(benches.map((b) => [b.id, b]));
+    const ZOOM_TO_MARKER = 15;
+
+    const rebuildMarkers = () => {
+      if (!map.isStyleLoaded()) return;
+
+      const b = map.getBounds();
+      // Во время зума/перерисовки кадр может быть без валидных границ. Не чистим маркеры и не подставляем
+      // bbox «весь мир» — иначе getClusters вернёт тысячи точек, DOM ломается и маркеры «мигают» / улетают в угол.
+      if (!b) return;
+
+      clearMarkers();
+      const bbox: [number, number, number, number] = [
+        b.getWest(),
+        b.getSouth(),
+        b.getEast(),
+        b.getNorth(),
+      ];
+      const zoom = Math.floor(map.getZoom());
+      const clusters = index.getClusters(bbox, zoom);
+
+      for (const feature of clusters) {
+        const coords = feature.geometry.coordinates as [number, number];
+        const [lng, lat] = coords;
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+        const props = feature.properties as {
+          cluster?: boolean;
+          cluster_id?: number;
+          point_count?: number;
+          benchId?: string;
+        };
+
+        if (props.cluster && props.cluster_id != null && props.point_count != null) {
+          const el = createClusterMarkerElement(props.point_count);
+          const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+            .setLngLat([lng, lat])
+            .addTo(map);
+
+          el.style.transition = "filter 0.15s ease";
+          el.addEventListener("mouseenter", () => {
+            el.style.filter = "brightness(1.12)";
+          });
+          el.addEventListener("mouseleave", () => {
+            el.style.filter = "";
+          });
+          el.addEventListener("click", (e: Event) => {
+            e.stopPropagation();
+            let targetZoom: number;
+            try {
+              targetZoom = index.getClusterExpansionZoom(props.cluster_id!);
+            } catch {
+              targetZoom = Math.min(map.getZoom() + 2, 18);
+            }
+            map.flyTo({
+              center: [lng, lat],
+              zoom: Math.min(Math.max(targetZoom, map.getZoom() + 0.5), 18),
+              duration: 480,
+            });
+          });
+
+          benchMarkersRef.current.push(marker);
+          continue;
+        }
+
+        if (props.benchId) {
+          const bench = benchById.get(props.benchId);
+          if (!bench) continue;
+          if (!Number.isFinite(bench.lng) || !Number.isFinite(bench.lat)) continue;
+
+          const coverUrl = bench.photos?.[0]?.url;
+          const marker = coverUrl
+            ? new mapboxgl.Marker({
+                element: createBenchPhotoMarkerElement(bench),
+                anchor: "center",
+              })
+            : new mapboxgl.Marker({ color: "#16a34a" });
+          marker.setLngLat([bench.lng, bench.lat]).addTo(map);
+
+          const el = marker.getElement();
+          if (el) {
+            el.style.cursor = "pointer";
+            el.style.transition = "filter 0.15s ease";
+            el.addEventListener("mouseenter", () => {
+              el.style.filter = "brightness(1.2)";
+            });
+            el.addEventListener("mouseleave", () => {
+              el.style.filter = "";
+            });
+            el.addEventListener("click", (e: Event) => {
+              e.stopPropagation();
+              map.flyTo({
+                center: [bench.lng, bench.lat],
+                zoom: Math.max(map.getZoom(), ZOOM_TO_MARKER),
+                duration: 500,
+              });
+              setSelectedBench(bench);
+            });
+          }
+
+          benchMarkersRef.current.push(marker);
+        }
+      }
+    };
+
+    rebuildMarkers();
+    // Первый кадр после стиля иногда без bounds — добираемся на idle
+    const rebuildOnceIdle = () => rebuildMarkers();
+    map.once("idle", rebuildOnceIdle);
+
+    // rAF на каждый zoom давал полное пересоздание DOM → мигание. Дебаунс: реже пересборка, но всё ещё «живёт» при зуме.
+    let zoomDebounce: ReturnType<typeof setTimeout> | null = null;
+    const ZOOM_REBUILD_MS = 100;
+    const onZoomWhileGesturing = () => {
+      if (zoomDebounce != null) clearTimeout(zoomDebounce);
+      zoomDebounce = setTimeout(() => {
+        zoomDebounce = null;
+        rebuildMarkers();
+      }, ZOOM_REBUILD_MS);
+    };
+    const onZoomOrMoveEnd = () => {
+      if (zoomDebounce != null) {
+        clearTimeout(zoomDebounce);
+        zoomDebounce = null;
+      }
+      rebuildMarkers();
+    };
+
+    map.on("zoom", onZoomWhileGesturing);
+    map.on("moveend", onZoomOrMoveEnd);
+    map.on("zoomend", onZoomOrMoveEnd);
+
+    return () => {
+      map.off("idle", rebuildOnceIdle);
+      if (zoomDebounce != null) {
+        clearTimeout(zoomDebounce);
+        zoomDebounce = null;
+      }
+      map.off("zoom", onZoomWhileGesturing);
+      map.off("moveend", onZoomOrMoveEnd);
+      map.off("zoomend", onZoomOrMoveEnd);
+      clearMarkers();
+    };
+  }, [mapReady, benches]);
 
   // Открыть модалку по ссылке из уведомления (?benchId=xxx)
   useEffect(() => {

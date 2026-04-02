@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { isAllowedBenchPhotoFile } from "@/lib/image-file-utils";
 import type { Bench, BenchCategory, BenchRatings, CreateBenchBody } from "@/types/bench";
 import {
   BENCH_CATEGORY_KEYS,
@@ -52,6 +53,50 @@ const DEFAULT_RATINGS: BenchRatings = {
   view: 3,
   vibe: 3,
 };
+
+/** Превью файла (useEffect: иначе в Strict Mode useMemo оставляет отозванный blob URL — «битая» картинка) */
+function PhotoThumb({
+  file,
+  disabled,
+  onRemove,
+}: {
+  file: File;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => {
+      URL.revokeObjectURL(u);
+    };
+  }, [file]);
+  if (!url) {
+    return (
+      <div className="h-16 w-16 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-600" />
+    );
+  }
+  return (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt=""
+        className="h-16 w-16 rounded-lg object-cover ring-1 ring-zinc-200 dark:ring-zinc-600"
+      />
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={disabled}
+        className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-xs text-white hover:bg-red-700"
+        aria-label="Убрать фото"
+      >
+        ×
+      </button>
+    </>
+  );
+}
 
 /** Кнопка-звезда: pointer, увеличение при hover, анимация при клике */
 function StarButton({
@@ -123,6 +168,10 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
   const [isSubmitting, setIsSubmitting] = useState(false);
   /** Текст ошибки с сервера (например «Нужны: title, description…») — показываем под формой */
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /** Фото к загрузке (до 6 шт.) */
+  const [photos, setPhotos] = useState<File[]>([]);
+  /** Подсказка, если выбранные файлы не прошли проверку (например пустой MIME на Windows) */
+  const [photoPickHint, setPhotoPickHint] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
   // Обновление одного рейтинга по ключу (accessibility, crowd, view, vibe)
@@ -133,6 +182,34 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
   const setRating = useCallback((key: keyof BenchRatings, value: number) => {
     setRatings((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  const MAX_PHOTOS = 6;
+  const MAX_PHOTO_MB = 5;
+
+  const onPickPhotos = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files;
+    if (!list?.length) return;
+    setPhotoPickHint(null);
+    const maxBytes = MAX_PHOTO_MB * 1024 * 1024;
+    const next: File[] = [...photos];
+    const fromInput = Array.from(list);
+    for (const f of fromInput) {
+      if (next.length >= MAX_PHOTOS) break;
+      if (!isAllowedBenchPhotoFile(f, maxBytes)) continue;
+      next.push(f);
+    }
+    setPhotos(next);
+    if (next.length === photos.length && fromInput.length > 0) {
+      setPhotoPickHint(
+        "Файлы не добавлены: нужны JPG, PNG, WebP или GIF до 5 МБ. Если вы на Windows и формат верный — попробуйте «Все файлы (*.*)» в диалоге или переименуйте в .jpg / .png."
+      );
+    }
+    e.target.value = "";
+  };
+
+  const removePhoto = (index: number) => {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
 
   /**
    * Обработчик отправки формы.
@@ -155,7 +232,7 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
     setIsSubmitting(true);
     setSubmitError(null);
 
-    const body: CreateBenchBody = {
+    const payload: CreateBenchBody = {
       title: trimmedTitle,
       description: description.trim(),
       lat,
@@ -164,11 +241,16 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
       ratings,
     };
 
+    const formData = new FormData();
+    formData.append("data", JSON.stringify(payload));
+    for (const f of photos) {
+      formData.append("photos", f);
+    }
+
     try {
       const res = await fetch("/api/benches", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body), // объект превращаем в строку JSON для сети
+        body: formData,
       });
 
       const data = await res.json();
@@ -193,20 +275,34 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
   // return возвращает «дерево» элементов (JSX). Значения в фигурных скобках {}
   // — это JavaScript (переменные, выражения). className задаёт стили (Tailwind).
 
+  const formId = "add-bench-form";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      {/* Полупрозрачный фон на весь экран; по клику можно было бы закрывать — пока только кнопка Отмена */}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-bench-title"
+      onClick={onCancel}
+    >
+      <div
+        className="flex max-h-[90dvh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-zinc-900"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shrink-0 border-b border-zinc-200 px-5 py-4 dark:border-zinc-700 sm:px-6">
+          <h2
+            id="add-bench-title"
+            className="text-xl font-semibold text-zinc-800 dark:text-zinc-100"
+          >
+            Новая лавочка
+          </h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Координаты: {lat.toFixed(5)}, {lng.toFixed(5)}
+          </p>
+        </div>
 
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl dark:bg-zinc-900">
-        <h2 className="mb-4 text-xl font-semibold text-zinc-800 dark:text-zinc-100">
-          Новая лавочка
-        </h2>
-        <p className="mb-4 text-sm text-zinc-500">
-          Координаты: {lat.toFixed(5)}, {lng.toFixed(5)}
-        </p>
-
-        {/* form — семантический контейнер. onSubmit срабатывает по Enter и по кнопке submit */}
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">
+        <form id={formId} onSubmit={handleSubmit} className="flex flex-col gap-4">
           {/* ---------- Название ---------- */}
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
@@ -237,6 +333,37 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
               disabled={isSubmitting}
             />
           </label>
+
+          {/* ---------- Фото (необязательно) ---------- */}
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Фото (до {MAX_PHOTOS}, каждое до {MAX_PHOTO_MB} МБ)
+            </span>
+            <input
+              type="file"
+              accept="image/*,.jpg,.jpeg,.png,.webp,.gif"
+              multiple
+              disabled={isSubmitting || photos.length >= MAX_PHOTOS}
+              onChange={onPickPhotos}
+              className="text-sm text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-green-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-green-700 dark:text-zinc-400"
+            />
+            {photoPickHint && (
+              <p className="text-sm text-amber-700 dark:text-amber-300">{photoPickHint}</p>
+            )}
+            {photos.length > 0 && (
+              <ul className="flex flex-wrap gap-2">
+                {photos.map((file, i) => (
+                  <li key={`${file.name}-${file.size}-${i}`} className="relative shrink-0">
+                    <PhotoThumb
+                      file={file}
+                      disabled={isSubmitting}
+                      onRemove={() => removePhoto(i)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           {/* ---------- Категория (выпадающий список) ---------- */}
           <label className="flex flex-col gap-1">
@@ -297,26 +424,29 @@ export default function AddBenchForm({ lng, lat, onSuccess, onCancel }: AddBench
               {submitError}
             </p>
           )}
+        </form>
+        </div>
 
-          {/* ---------- Кнопки ---------- */}
-          <div className="flex gap-3 pt-2">
+        <div className="shrink-0 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700 sm:px-6 sm:py-4">
+          <div className="flex gap-3">
             <button
               type="button"
               onClick={onCancel}
-              className="flex-1 rounded-xl border border-zinc-300 py-2.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              className="flex-1 cursor-pointer rounded-xl border border-zinc-300 py-2.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
               disabled={isSubmitting}
             >
               Отмена
             </button>
             <button
               type="submit"
-              className="flex-1 rounded-xl bg-green-600 py-2.5 font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+              form={formId}
+              className="flex-1 cursor-pointer rounded-xl bg-green-600 py-2.5 font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isSubmitting}
             >
               {isSubmitting ? "Сохранение…" : "Сохранить"}
             </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );
